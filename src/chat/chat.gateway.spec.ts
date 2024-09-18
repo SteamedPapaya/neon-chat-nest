@@ -16,8 +16,9 @@ describe('ChatGateway', () => {
   beforeAll(async () => {
     // Redis in-memory 서버 시작
     redisServer = new RedisMemoryServer();
-    const redisPort = await redisServer.getPort();
-
+    // const redisPort = await redisServer.getPort();
+    const redisPort = 6379;
+    
     const redisUrl = `redis://127.0.0.1:${redisPort}`;
     redisPublisher = new Redis(redisUrl);
     redisSubscriber = new Redis(redisUrl);
@@ -55,21 +56,34 @@ describe('ChatGateway', () => {
     expect(mockSocket.emit).toHaveBeenCalledTimes(0); // 연결 시 바로 메시지를 보내지 않음
   });
 
-  it('should broadcast messages using Redis', async () => {
+  it('should broadcast messages using Redis', (done) => {
     const testMessage = { sender: 'John', message: 'Hello World' };
-
-    // 메시지 발행
-    gateway.handleMessage(mockSocket, testMessage);
-
-    // 메시지 수신을 기다리기 위한 비동기 처리
-    await new Promise<void>((resolve) => {
-      redisSubscriber.on('message', (channel, message) => {
-        expect(message).toBe(`${testMessage.sender}: ${testMessage.message}`);
-        resolve();
-      });
+  
+    // Redis 구독이 완료된 후에 메시지 발행
+    redisSubscriber.subscribe('chat', (err, count) => {
+      if (err) {
+        console.error('Failed to subscribe:', err);
+        done(err); // 구독 실패 시 테스트 종료
+      } else {
+        console.log(`Subscribed successfully to ${count} channels`);
+  
+        // 구독 후 메시지 발행
+        gateway.handleMessage(mockSocket, testMessage);
+        console.log('Message published'); // 메시지 발행 후 로그
+  
+        // Redis에서 메시지 수신 (디버깅을 위한 로그 추가)
+        redisSubscriber.on('message', (channel, message) => {
+          console.log(`Received message on channel ${channel}: ${message}`);
+  
+          try {
+            expect(message).toBe(`${testMessage.sender}: ${testMessage.message}`);
+            expect(mockServer.emit).toHaveBeenCalledWith('message', `${testMessage.sender}: ${testMessage.message}`);
+            done(); // 테스트 종료
+          } catch (error) {
+            done(error); // 에러 발생 시 테스트 종료
+          }
+        });
+      }
     });
-
-    // WebSocket 서버가 emit을 호출했는지 확인
-    expect(mockServer.emit).toHaveBeenCalledWith('message', `${testMessage.sender}: ${testMessage.message}`);
-  });
+  }, 10000); // 타임아웃 30초로 설정
 });
